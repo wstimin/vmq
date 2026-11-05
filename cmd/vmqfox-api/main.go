@@ -156,7 +156,8 @@ func main() {
 		serverErrors <- application.Server().Serve(listener)
 	}()
 	readyContext, readyCancel := context.WithTimeout(shutdownContext, 5*time.Second)
-	readyErr := confirmHTTPReady(readyContext, listener.Addr().String())
+	// A wildcard TCP listener may report [::] even when IPv4 was configured.
+	readyErr := confirmHTTPReady(readyContext, cfg.Server.Address())
 	readyCancel()
 	if readyErr == nil {
 		readyErr = application.MarkHealthy()
@@ -194,9 +195,9 @@ func confirmHTTPReady(ctx context.Context, address string) error {
 	if err != nil {
 		return err
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
 		host = "127.0.0.1"
-		if ip.To4() == nil {
+		if ip != nil && ip.To4() == nil {
 			host = "::1"
 		}
 	}
@@ -204,14 +205,17 @@ func confirmHTTPReady(ctx context.Context, address string) error {
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// This local probe must not use a proxy or a shared external HTTP transport.
+	transport := &http.Transport{}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)
 	if err != nil {
-		return errors.New("HTTP 就绪检查连接失败")
+		return fmt.Errorf("HTTP 就绪检查连接失败: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP 就绪检查返回 %d", response.StatusCode)
+		return fmt.Errorf("HTTP 就绪检查 %s 返回 %d", request.URL, response.StatusCode)
 	}
 	return nil
 }
