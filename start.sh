@@ -11,7 +11,11 @@ app_dir=/opt/vmqfox-web
 if [[ "$package_dir" != "$app_dir" ]]; then
   if [[ -e "$app_dir/.env" || -e "$app_dir/.installed" ]]; then echo '目标目录已有安装，请从 /opt/vmqfox-web 启动，禁止覆盖已有配置'; exit 1; fi
   mkdir -p -- "$app_dir"
-  cp -- "$binary" start.sh run.sh "$app_dir/"
+  # Replace inodes so retrying an unfinished installation can update a running binary.
+  for file in "$binary" start.sh run.sh; do
+    install -m 750 -- "$file" "$app_dir/$file.new"
+    mv -f -- "$app_dir/$file.new" "$app_dir/$file"
+  done
 fi
 cd -- "$app_dir"
 id vmqfox-web >/dev/null 2>&1 || useradd --system --home-dir "$app_dir" --shell /usr/sbin/nologin vmqfox-web
@@ -43,7 +47,8 @@ UMask=0077
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now vmqfox-web.service
+systemctl enable vmqfox-web.service
+systemctl restart vmqfox-web.service
 for ((i=0;i<30;i++)); do
   if [[ -s .install-token || -s .env ]]; then break; fi
   sleep 0.2

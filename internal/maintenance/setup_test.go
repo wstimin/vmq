@@ -17,7 +17,7 @@ func validInstallForm() url.Values {
 }
 
 func TestInstallerProtectsSubmissionAndClosesAfterSuccess(t *testing.T) {
-	for _, scenario := range []string{"bad token", "cross site", "invalid port", "password mismatch", "newline", "success", "database error", "too large"} {
+	for _, scenario := range []string{"bad token", "cross site", "null origin", "invalid port", "password mismatch", "newline", "success", "database error", "too large"} {
 		t.Run(scenario, func(t *testing.T) {
 			calls := 0
 			s := &installer{dir: t.TempDir(), token: strings.Repeat("a", 64), done: make(chan struct{}), install: func(_ context.Context, in InstallInput, _, _ string) error {
@@ -45,11 +45,17 @@ func TestInstallerProtectsSubmissionAndClosesAfterSuccess(t *testing.T) {
 			}
 			r := httptest.NewRequest(http.MethodPost, "http://pay.example.com/install", strings.NewReader(form.Encode()))
 			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.Header.Set("Origin", "http://pay.example.com")
 			if scenario == "cross site" {
 				r.Header.Set("Origin", "https://evil.example.com")
+			} else if scenario == "null origin" {
+				r.Header.Set("Origin", "null")
 			}
 			w := httptest.NewRecorder()
 			s.ServeHTTP(w, r)
+			if (scenario == "cross site" || scenario == "null origin") && (w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "不允许跨站")) {
+				t.Fatal("unsafe origin was not rejected")
+			}
 			if scenario == "success" {
 				if calls != 1 || !s.complete || !strings.Contains(w.Body.String(), "安装完成") || !strings.Contains(w.Body.String(), "http-equiv=\"refresh\"") {
 					t.Fatalf("installation failed: %d %s", w.Code, w.Body.String())
@@ -95,6 +101,9 @@ func TestInstallerTokenAndExistingConfiguration(t *testing.T) {
 	s := &installer{dir: dir, token: token}
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/install", nil))
+	if w.Header().Get("Referrer-Policy") != "same-origin" {
+		t.Fatal("installer policy must preserve Origin for same-origin browser form submissions")
+	}
 	if strings.Contains(w.Body.String(), token) {
 		t.Fatal("untrusted visitor learned installer secret")
 	}
