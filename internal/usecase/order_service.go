@@ -467,6 +467,13 @@ func (s *OrderService) resolvePayURL(ctx context.Context, paymentType payment.Ty
 	if err != nil && !errors.Is(err, port.ErrNotFound) {
 		return "", false, wrap(CodeDependency, "查询支付二维码失败", err)
 	}
+	general, err := s.qrcodes.FindEnabledByAmount(ctx, paymentType, 0)
+	if err == nil && general.PayURL != "" {
+		return general.PayURL, true, nil
+	}
+	if err != nil && !errors.Is(err, port.ErrNotFound) {
+		return "", false, wrap(CodeDependency, "查询通用支付二维码失败", err)
+	}
 
 	key := setting.AlipayPayURLKey
 	method := "支付宝"

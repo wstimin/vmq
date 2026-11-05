@@ -222,12 +222,19 @@ export const QrcodesView: React.FC<QrcodesViewProps> = ({ type }) => {
                       {row.pay_url}
                     </TableCell>
                     <TableCell>
-                      <Switch
-                        checked={row.state === 1}
-                        onCheckedChange={(checked) =>
-                          toggleStateMutation.mutate({ id: row.id, state: checked ? 1 : 0 })
-                        }
-                      />
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          aria-label={`${payTypeName}收款码启用状态`}
+                          checked={row.state === 0}
+                          disabled={toggleStateMutation.isPending}
+                          onCheckedChange={(checked) =>
+                            toggleStateMutation.mutate({ id: row.id, state: checked ? 0 : 1 })
+                          }
+                        />
+                        <span className="text-xs text-muted-foreground">
+                          {row.state === 0 ? '已启用' : '已停用'}
+                        </span>
+                      </div>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
