@@ -279,7 +279,9 @@ docker compose build vmqfox-api
 
 ## 发布和使用更新
 
-将改造后的源码放入你自己的 `wstimin/vmq` 仓库。在 GitHub **Actions → Build and release Go backend → Run workflow** 输入版本号：首次可用 `v3.1.0-web.1`，下次用 `v3.1.0-web.2`，也可使用更高的 `v3.1.1`。工作流构建完整前端和两个 Linux 架构程序，并发布正式 Release（不要勾选预发布）。
+向 `wstimin/vmq` 的 **main 分支推送代码后，会自动构建并发布正式 Release**，无需手动操作 Actions。版本号按源码基础版本和工作流运行编号生成，例如 `v3.1.0-web.1`、`v3.1.0-web.2`，发布程序会嵌入相同版本号。工作流先运行测试、构建完整前端和两个 Linux 架构程序，成功后才发布 ZIP/TAR.GZ 安装包、程序及校验文件。
+
+也可在 GitHub **Actions → Build and release Go backend → Run workflow** 手动补发；版本号留空自动生成，需要指定时填写尚未发布的更高版本号。失败的构建可以重新运行。后续提升基础版本时修改 `internal/maintenance/files.go` 的 `Version`，再推送即可。
 
 Release 附件必须包含 `vmqfox-api-linux-amd64`、`vmqfox-api-linux-arm64` 和 `checksums.txt`。网页安装包也一并发布。后台「系统设置 → 版本更新」点击检测，发现新版本后手动点击「立即更新」；页面显示真实下载进度及校验、重启阶段，服务恢复到目标版本后自动刷新。仅接受比当前版本高的正式 Release，不会自动安装或降级。
 

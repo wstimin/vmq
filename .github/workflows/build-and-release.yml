@@ -1,20 +1,27 @@
 name: Build and release Go backend
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "为版本创建一个标签，例如 v1.0.0"
-        required: true
+        description: "可选：指定版本号；留空自动按运行编号生成"
+        required: false
         type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: vmq-release
+  cancel-in-progress: false
+
 env:
   GO_VERSION: "1.26.5"
   NODE_VERSION: "24"
-  PNPM_VERSION: "11.22.0"
+  PNPM_VERSION: "10.34.3"
   GOFLAGS: "-mod=mod"
 
 jobs:
@@ -23,6 +30,24 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            release_tag="$REQUESTED_TAG"
+          else
+            base=$(sed -nE 's/^var Version = "(v?[0-9]+\.[0-9]+\.[0-9]+)(-web\.[0-9]+)?"/\1/p' internal/maintenance/files.go)
+            [[ -n "$base" ]] || { echo '无法读取源码基础版本'; exit 1; }
+            release_tag="$base-web.$GITHUB_RUN_NUMBER"
+          fi
+          [[ "$release_tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-web\.[0-9]+)?$ ]] || { echo '版本号格式无效'; exit 1; }
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "本次将发布：$release_tag"
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -80,7 +105,7 @@ jobs:
       - name: Build Linux binaries
         shell: bash
         env:
-          RELEASE_TAG: ${{ inputs.tag_name }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-web\.[0-9]+)?$ ]] || { echo '版本号请使用 v3.1.0-web.2 或 v3.1.1'; exit 1; }
@@ -92,14 +117,19 @@ jobs:
           chmod +x dist/start.sh dist/run.sh dist/vmqfox-api-linux-*
           (cd dist && sha256sum vmqfox-api-linux-* > checksums.txt)
           tar -czf "vmqfox-backend-$RELEASE_TAG.tar.gz" -C dist .
+          (cd dist && zip -q "../vmqfox-backend-$RELEASE_TAG.zip" *)
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag_name }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           prerelease: false
+          make_latest: true
+          generate_release_notes: true
           files: |
-            vmqfox-backend-${{ inputs.tag_name }}.tar.gz
+            vmqfox-backend-${{ steps.version.outputs.tag }}.tar.gz
+            vmqfox-backend-${{ steps.version.outputs.tag }}.zip
             dist/vmqfox-api-linux-amd64
             dist/vmqfox-api-linux-arm64
             dist/checksums.txt
