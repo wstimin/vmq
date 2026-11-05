@@ -1,0 +1,105 @@
+name: Build and release Go backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "为版本创建一个标签，例如 v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.26.5"
+  NODE_VERSION: "24"
+  PNPM_VERSION: "11.22.0"
+  GOFLAGS: "-mod=mod"
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # 先构建前端：产物写入 internal/http/static/out，供后续 go:embed 使用。
+      # 发布包不允许依赖仓库忽略目录中的旧 static/out。
+      - name: Build embedded React frontend
+        shell: bash
+        working-directory: web
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Verify embedded asset integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=internal/http/static/out
+          test -f "$out/index.html" || { echo "构建产物缺少 index.html"; exit 1; }
+          grep -oE '(src|href)="/assets/[^"]+"' "$out/index.html" \
+            | sed -E 's#^[a-z]+="/assets/(.*)"$#\1#' \
+            | sort -u > referenced-assets.txt
+          test -s referenced-assets.txt || { echo "index.html 未引用任何 assets 资源"; exit 1; }
+          while read -r asset; do
+            test -f "$out/assets/$asset" || { echo "index.html 引用的资源缺失: $asset"; exit 1; }
+            echo "已校验前端资源: $asset"
+          done < referenced-assets.txt
+          rm -f referenced-assets.txt
+
+      - name: Resolve Go modules
+        run: go mod download
+
+      - name: Static analysis and tests
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go test ./...
+
+      - name: Build Linux binaries
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-web\.[0-9]+)?$ ]] || { echo '版本号请使用 v3.1.0-web.2 或 v3.1.1'; exit 1; }
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w -X github.com/hulisang/vmqfox-backend/internal/maintenance.Version=$RELEASE_TAG -X github.com/hulisang/vmqfox-backend/internal/maintenance.DefaultRepository=$GITHUB_REPOSITORY" -o "dist/vmqfox-api-linux-$arch" ./cmd/vmqfox-api
+          done
+          cp database/schema.sql env.example README.md start.sh run.sh dist/
+          chmod +x dist/start.sh dist/run.sh dist/vmqfox-api-linux-*
+          (cd dist && sha256sum vmqfox-api-linux-* > checksums.txt)
+          tar -czf "vmqfox-backend-$RELEASE_TAG.tar.gz" -C dist .
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag_name }}
+          prerelease: false
+          files: |
+            vmqfox-backend-${{ inputs.tag_name }}.tar.gz
+            dist/vmqfox-api-linux-amd64
+            dist/vmqfox-api-linux-arm64
+            dist/checksums.txt
